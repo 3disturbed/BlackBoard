@@ -113,6 +113,8 @@ Here, 600000 milliseconds (10 minutes) means each cached item will be automatica
 TTL helps ensure that stale data is automatically cleared, freeing up memory and keeping cached data fresh.
 
 
+# Commands
+
 ## get(section, key)
 Retrieves the value associated with the specified section and key.
 
