@@ -2,6 +2,7 @@ import bcrypt from 'bcrypt';
 import nodemailer from 'nodemailer';
 import jwt from 'jsonwebtoken';
 import BB from './BlackBoard.js'; // Assumes BlackBoard is initialized in server.ts
+import config from './config.json'; // Importing config.json
 
 // Types
 interface User {
@@ -13,15 +14,15 @@ interface User {
 
 type Role = 'user' | 'admin' | 'moderator'; // Add roles as needed
 
-// JWT Secret for signing tokens
-const JWT_SECRET = 'your_secret_key'; // Change this to a secure, private key in production
+// Extracting configurations from config.json
+const { jwtSecret, email } = config;
 
 // Email Configuration for Password Recovery
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  service: email.service,
   auth: {
-    user: 'your-email@gmail.com',
-    pass: 'your-email-password'
+    user: email.user,
+    pass: email.pass
   }
 });
 
@@ -64,7 +65,7 @@ const Account = {
     }
 
     // Generate JWT token with user role
-    const token = jwt.sign({ email, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
+    const token = jwt.sign({ email, role: user.role }, jwtSecret, { expiresIn: '1h' });
     console.log('User logged in successfully');
     return token;
   },
@@ -72,7 +73,7 @@ const Account = {
   // Verify JWT Token
   verifyToken(token: string): { email: string; role: Role } {
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as { email: string; role: Role };
+      const decoded = jwt.verify(token, jwtSecret) as { email: string; role: Role };
       return decoded;
     } catch (error) {
       throw new Error('Invalid token');
@@ -105,7 +106,7 @@ const Account = {
     await BB.set('users', email, { ...user, password: hashedTempPassword });
 
     await transporter.sendMail({
-      from: 'your-email@gmail.com',
+      from: email.user,
       to: email,
       subject: 'Password Recovery',
       text: `Your temporary password is: ${tempPassword}`
@@ -122,6 +123,31 @@ const Account = {
     user.creditsBalance = amount;
     await BB.set('users', email, user);
     console.log(`Credits balance set to ${amount} for ${email}`);
+  },
+
+  // Add Credits to User Balance
+  async addCredits(email: string, amount: number): Promise<void> {
+    const user = await BB.get('users', email) as User;
+    if (!user) {
+      throw new Error('User does not exist');
+    }
+    user.creditsBalance += amount;
+    await BB.set('users', email, user);
+    console.log(`Added ${amount} credits to ${email}. New balance: ${user.creditsBalance}`);
+  },
+
+  // Remove Credits from User Balance
+  async removeCredits(email: string, amount: number): Promise<void> {
+    const user = await BB.get('users', email) as User;
+    if (!user) {
+      throw new Error('User does not exist');
+    }
+    if (user.creditsBalance < amount) {
+      throw new Error('Insufficient credits');
+    }
+    user.creditsBalance -= amount;
+    await BB.set('users', email, user);
+    console.log(`Removed ${amount} credits from ${email}. New balance: ${user.creditsBalance}`);
   },
 
   // Get User Credits Balance
