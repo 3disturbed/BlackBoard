@@ -101,7 +101,7 @@ const Account = {
   }
 };
 
-// Example Usage
+/* Example Usage
 (async () => {
   try {
     const email = 'user@example.com';
@@ -130,5 +130,5 @@ const Account = {
     console.error(error.message);
   }
 })();
-
+*/
 export default Account;
