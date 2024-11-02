@@ -1,3 +1,7 @@
+// Persistant Json BlackBoard Class (Acts like INI File Wrapper from back in the day)
+// Can be used with Mongo. 
+
+// ES6 NodeJS Module
 import fs from 'fs/promises';
 import path from 'path';
 import { MongoClient } from 'mongodb';
