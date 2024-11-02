@@ -2,7 +2,7 @@
 Persistant Black Board DataStore
 
 ```
-import BB from './BlackBoard.js';
+import BB from './BlackBoard';
 
 // Enable debug mode to log actions
 BB.debug = true;
@@ -26,7 +26,7 @@ BB.removeSection('database');
 with Mongo 
 
 ```
-import BB from './BlackBoard.js';
+import BB from './BlackBoard';
 
 // Enable debug mode to log actions
 BB.debug = true;
