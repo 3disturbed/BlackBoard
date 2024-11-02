@@ -1,151 +1,211 @@
-// Persistant Json BlackBoard Class (Acts like INI File Wrapper from back in the day)
-// Can be used with Mongo. 
-
-// ES6 NodeJS Module
 import fs from 'fs/promises';
+import { watch } from 'fs';
 import path from 'path';
-import { MongoClient } from 'mongodb';
 
-// Define the path to the persistent JSON file for caching
 const filePath = path.resolve('PersistentState.json');
 
-// Initialize an in-memory store
-let store = {};
+class BlackBoard {
+  constructor() {
+    this.store = {};  // Can be an LRU instance or a plain object
+    this.useCache = false; // Will be set to true if LRU caching is used
+    this.mongoClient = null;
+    this.mongoCollection = null;
+    this.mongoWriteQueue = [];
+    this.debug = false;
 
-// MongoDB client and collection references
-let mongoClient = null;
-let mongoCollection = null;
+    this.loadStore();
+    this.setupFileWatcher();
+  }
 
-// BB object with debug property and methods for accessing and modifying the store
-const BB = {
-  // Enable or disable debug mode
-  debug: false,
-
-  // Initialize the in-memory store
-  async init() {
-    await loadStore();
-  },
-
-  // Connect to MongoDB
-  async useMongo(serverDetails) {
-    try {
-      mongoClient = new MongoClient(serverDetails.url);
-      await mongoClient.connect();
-      const db = mongoClient.db(serverDetails.dbName);
-      mongoCollection = db.collection(serverDetails.collectionName);
-      if (this.debug) console.log('BB.useMongo - Connected to MongoDB');
-    } catch (error) {
-      console.error('Error connecting to MongoDB:', error);
+  async useMongo(serverDetails, maxCacheItems = 500, ttl = 1000 * 60 * 10) {
+    // Dynamically load MongoDB and connect
+    if (!this.mongoClient) {
+      const { MongoClient } = await import('mongodb');
+      this.mongoClient = new MongoClient(serverDetails.url);
+      await this.mongoClient.connect();
+      const db = this.mongoClient.db(serverDetails.dbName);
+      this.mongoCollection = db.collection(serverDetails.collectionName);
+      if (this.debug) console.log('BlackBoard.useMongo - Connected to MongoDB');
     }
-  },
 
-  // Get a value from the store or MongoDB
+    // Initialize the LRU cache only if MongoDB is enabled
+    if (!this.useCache) {
+      const { default: LRU } = await import('lru-cache');
+      this.store = new LRU({ max: maxCacheItems, ttl });
+      this.useCache = true;
+      if (this.debug) console.log('BlackBoard - LRU cache initialized');
+    }
+  }
+
   async get(section, key) {
-    // Check in-memory cache first
-    if (store[section]?.[key] !== undefined) {
-      if (this.debug) console.log(`BB.get (cache) - Section: ${section}, Key: ${key}`);
-      return store[section][key];
+    const cacheKey = `${section}.${key}`;
+    const cachedValue = this.useCache ? this.store.get(cacheKey) : (this.store[section]?.[key]);
+    
+    if (cachedValue !== undefined) {
+      if (this.debug) console.log(`BlackBoard.get - Section: ${section}, Key: ${key}`);
+      return cachedValue;
     }
-    // Fallback to MongoDB if not in cache
-    if (mongoCollection) {
-      const result = await mongoCollection.findOne({ section, key });
+
+    if (this.mongoCollection) {
+      const result = await this.mongoCollection.findOne({ section, key });
       if (result) {
-        store[section] = store[section] || {};
-        store[section][key] = result.value;
-        if (this.debug) console.log(`BB.get (Mongo) - Section: ${section}, Key: ${key}`);
+        if (this.useCache) {
+          this.store.set(cacheKey, result.value);
+        } else {
+          this.store[section] = this.store[section] || {};
+          this.store[section][key] = result.value;
+        }
+        if (this.debug) console.log(`BlackBoard.get (Mongo) - Section: ${section}, Key: ${key}`);
         return result.value;
       }
     }
     return undefined;
-  },
+  }
 
-  // Set a value in the store or MongoDB, with optional cache control
   async set(section, key, value, canCache = true) {
+    const cacheKey = `${section}.${key}`;
     if (canCache) {
-      // Update in-memory cache
-      if (!store[section]) {
-        store[section] = {};
+      if (this.useCache) {
+        this.store.set(cacheKey, value);
+      } else {
+        this.store[section] = this.store[section] || {};
+        this.store[section][key] = value;
       }
-      store[section][key] = value;
     }
-    // Always update MongoDB if connected
-    if (mongoCollection) {
-      await mongoCollection.updateOne(
-        { section, key },
-        { $set: { value } },
-        { upsert: true }
-      );
-      if (this.debug) console.log(`BB.set - Section: ${section}, Key: ${key}, Value: ${value}, canCache: ${canCache}`);
-    }
-  },
 
-  // Remove a key from a section in both the cache and MongoDB
+    if (this.mongoCollection) {
+      this.mongoWriteQueue.push({ section, key, value });
+      if (this.mongoWriteQueue.length >= 10) {
+        await this.flushMongoWrites();
+      }
+    }
+    if (this.debug) console.log(`BlackBoard.set - Section: ${section}, Key: ${key}, Value: ${value}, canCache: ${canCache}`);
+  }
+
   async removeKey(section, key) {
-    if (store[section]) {
-      delete store[section][key];
-      if (Object.keys(store[section]).length === 0) {
-        delete store[section];
+    const cacheKey = `${section}.${key}`;
+    if (this.useCache) {
+      this.store.delete(cacheKey);
+    } else if (this.store[section]) {
+      delete this.store[section][key];
+      if (Object.keys(this.store[section]).length === 0) {
+        delete this.store[section];
       }
     }
-    if (mongoCollection) {
-      await mongoCollection.deleteOne({ section, key });
-      if (this.debug) console.log(`BB.removeKey - Section: ${section}, Key: ${key}`);
-    }
-  },
 
-  // Remove an entire section in both the cache and MongoDB
+    if (this.mongoCollection) {
+      await this.mongoCollection.deleteOne({ section, key });
+      if (this.debug) console.log(`BlackBoard.removeKey - Section: ${section}, Key: ${key}`);
+    }
+  }
+
   async removeSection(section) {
-    delete store[section];
-    if (mongoCollection) {
-      await mongoCollection.deleteMany({ section });
-      if (this.debug) console.log(`BB.removeSection - Section: ${section}`);
-    }
-  }
-};
-
-// Load data from JSON file on startup
-async function loadStore() {
-  try {
-    const data = await fs.readFile(filePath, 'utf-8');
-    store = JSON.parse(data);
-    if (BB.debug) console.log('BB.init - Store loaded from PersistentState.json');
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      console.log('PersistentState.json not found. Creating new file.');
-      store = {};
-      await saveStore();
+    if (this.useCache) {
+      this.store.forEach((_, key) => {
+        if (key.startsWith(`${section}.`)) this.store.delete(key);
+      });
     } else {
-      console.error('Error loading PersistentState.json:', error);
+      delete this.store[section];
+    }
+
+    if (this.mongoCollection) {
+      await this.mongoCollection.deleteMany({ section });
+      if (this.debug) console.log(`BlackBoard.removeSection - Section: ${section}`);
     }
   }
-}
 
-// Save data to JSON file
-async function saveStore() {
-  try {
-    await fs.writeFile(filePath, JSON.stringify(store, null, 2));
-    if (BB.debug) console.log('BB.saveStore - Store saved to PersistentState.json');
-  } catch (error) {
-    console.error('Error saving PersistentState.json:', error);
+  async flushMongoWrites() {
+    if (!this.mongoCollection || this.mongoWriteQueue.length === 0) return;
+
+    const bulkOps = this.mongoWriteQueue.map(item => ({
+      updateOne: {
+        filter: { section: item.section, key: item.key },
+        update: { $set: { value: item.value } },
+        upsert: true
+      }
+    }));
+
+    try {
+      await this.mongoCollection.bulkWrite(bulkOps);
+      if (this.debug) console.log('BlackBoard.flushMongoWrites - MongoDB batch write completed');
+      this.mongoWriteQueue = [];
+    } catch (error) {
+      console.error('Error performing batch write to MongoDB:', error);
+    }
+  }
+
+  async loadStore() {
+    try {
+      const data = await fs.readFile(filePath, 'utf-8');
+      const jsonData = JSON.parse(data);
+      Object.entries(jsonData).forEach(([section, keys]) => {
+        Object.entries(keys).forEach(([key, value]) => {
+          if (this.useCache) {
+            this.store.set(`${section}.${key}`, value);
+          } else {
+            this.store[section] = this.store[section] || {};
+            this.store[section][key] = value;
+          }
+        });
+      });
+      if (this.debug) console.log('BlackBoard.loadStore - Store loaded from PersistentState.json');
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        console.log('PersistentState.json not found. Creating new file.');
+        await this.saveStore();
+      } else {
+        console.error('Error loading PersistentState.json:', error);
+      }
+    }
+  }
+
+  async saveStore() {
+    const jsonData = {};
+
+    if (this.useCache) {
+      this.store.forEach((value, key) => {
+        const [section, subKey] = key.split('.');
+        jsonData[section] = jsonData[section] || {};
+        jsonData[section][subKey] = value;
+      });
+    } else {
+      Object.assign(jsonData, this.store);
+    }
+
+    try {
+      await fs.writeFile(filePath, JSON.stringify(jsonData, null, 2));
+      if (this.debug) console.log('BlackBoard.saveStore - Store saved to PersistentState.json');
+    } catch (error) {
+      console.error('Error saving PersistentState.json:', error);
+    }
+  }
+
+  setupFileWatcher() {
+    watch(filePath, async (eventType) => {
+      if (eventType === 'change') {
+        await this.loadStore();
+        if (this.debug) console.log('BlackBoard.setupFileWatcher - PersistentState.json reloaded');
+      }
+    });
+  }
+
+  async setupShutdown() {
+    process.on('SIGTERM', async () => {
+      if (this.debug) console.log('BlackBoard - Received SIGTERM. Saving store to PersistentState.json...');
+      await this.saveStore();
+      await this.mongoClient?.close();
+      process.exit(0);
+    });
+
+    process.on('SIGINT', async () => {
+      if (this.debug) console.log('BlackBoard - Process interrupted. Saving store to PersistentState.json...');
+      await this.saveStore();
+      await this.mongoClient?.close();
+      process.exit(0);
+    });
   }
 }
 
-// Save the store to file on SIGTERM
-process.on('SIGTERM', async () => {
-  if (BB.debug) console.log('BB - Received SIGTERM. Saving store to PersistentState.json...');
-  await saveStore();
-  process.exit(0);
-});
-
-// Optional: Auto-save on process exit (e.g., SIGINT for CTRL+C)
-process.on('SIGINT', async () => {
-  if (BB.debug) console.log('BB - Process interrupted. Saving store to PersistentState.json...');
-  await saveStore();
-  process.exit(0);
-});
-
-// Initialize BB by loading the store
-await BB.init();
-
-// Export BB as the single export
+// Export a single instance of BlackBoard
+const BB = new BlackBoard();
 export default BB;
