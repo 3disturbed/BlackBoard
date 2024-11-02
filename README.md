@@ -79,6 +79,39 @@ await BB.useMongo({
   collectionName: 'config'
 }, 500, 600000);
 ```
+Breakdown of Each Parameter
+## url: 'mongodb://localhost:27017':
+
+This is the MongoDB connection URL.
+mongodb://localhost:27017 connects to a MongoDB instance running on the local machine (localhost) on the default MongoDB port (27017).
+
+## If MongoDB is running on a remote server or uses authentication, the URL can be adjusted accordingly (e.g., mongodb://username:password@host:port/dbname).
+
+## dbName: 'configDB':
+
+Database Name in MongoDB where the data will be stored.
+Here, configDB is the name of the database.
+If configDB does not exist in MongoDB, MongoDB will automatically create it the first time it is used.
+
+
+## collectionName: 'config':
+
+Collection Name within the specified database where BlackBoard data will be stored.
+config is the name of the collection within the configDB database.
+Similar to databases, if this collection doesn’t already exist, MongoDB will create it upon the first write operation.
+
+## 500 (maxCacheItems):
+
+Maximum Number of Items in the LRU (Least Recently Used) cache.
+If MongoDB is enabled, this number limits the cache to 500 items at any one time.
+Once the cache reaches this limit, it will start evicting the least recently accessed items to make room for new ones, optimizing memory usage.
+
+## 600000 (ttl):
+
+Time-to-Live (TTL) in milliseconds for each item in the cache.
+Here, 600000 milliseconds (10 minutes) means each cached item will be automatically removed from memory if it hasn’t been accessed in 10 minutes.
+TTL helps ensure that stale data is automatically cleared, freeing up memory and keeping cached data fresh.
+
 
 ## get(section, key)
 Retrieves the value associated with the specified section and key.
