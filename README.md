@@ -26,7 +26,7 @@ BB.removeSection('database');
 with Mongo 
 
 ```
-import BB from './PersistentConfig.js';
+import BB from './BlackBoard.js';
 
 // Enable debug mode to log actions
 BB.debug = true;
