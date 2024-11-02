@@ -1,0 +1,8 @@
+{
+  "jwtSecret": "your_secret_key",
+  "email": {
+    "user": "your-email@gmail.com",
+    "pass": "your-email-password",
+    "service": "gmail"
+  }
+}
