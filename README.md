@@ -1,5 +1,5 @@
 # BlackBoard
-Persistant Black Board DataStore
+Persistant Black Board DataStore using JSON, with Mongo support, Available in Native and TS
 
 ```
 import BB from './BlackBoard';
