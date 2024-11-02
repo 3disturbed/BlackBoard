@@ -5,28 +5,19 @@ import bcrypt from 'bcrypt';
 import nodemailer from 'nodemailer';
 import jwt from 'jsonwebtoken';
 import BB from './BlackBoard.js'; // Assumes BlackBoard is initialized in server.js
+import config from './config.json'; // Importing configuration
 
-// JWT Secret for signing tokens
-const JWT_SECRET = 'your_secret_key'; // Change this to a secure, private key in production
+// Extracting configurations from config.json
+const { jwtSecret, email } = config;
 
 // Email Configuration for Password Recovery
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  service: email.service,
   auth: {
-    user: 'your-email@gmail.com',
-    pass: 'your-email-password'
+    user: email.user,
+    pass: email.pass
   }
 });
-
-// Helper Functions
-async function hashPassword(password) {
-  const salt = await bcrypt.genSalt(10);
-  return bcrypt.hash(password, salt);
-}
-
-async function validatePassword(password, hash) {
-  return bcrypt.compare(password, hash);
-}
 
 // Account Object with Methods
 const Account = {
@@ -38,8 +29,9 @@ const Account = {
       throw new Error('User already exists');
     }
 
-    const hashedPassword = await hashPassword(password);
-    await BB.set('users', email, { email, password: hashedPassword, role, creditsBalance: 0 });
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const newUser = { email, password: hashedPassword, role, creditsBalance: 0 };
+    await BB.set('users', email, newUser);
     console.log(`User registered successfully with role: ${role}`);
   },
 
@@ -50,13 +42,13 @@ const Account = {
       throw new Error('User does not exist');
     }
 
-    const isPasswordValid = await validatePassword(password, user.password);
+    const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       throw new Error('Invalid password');
     }
 
     // Generate JWT token with user role
-    const token = jwt.sign({ email, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
+    const token = jwt.sign({ email, role: user.role }, jwtSecret, { expiresIn: '1h' });
     console.log('User logged in successfully');
     return token;
   },
@@ -64,7 +56,7 @@ const Account = {
   // Verify JWT Token
   verifyToken(token) {
     try {
-      const decoded = jwt.verify(token, JWT_SECRET);
+      const decoded = jwt.verify(token, jwtSecret);
       return decoded; // Returns the decoded token (email, role)
     } catch (error) {
       throw new Error('Invalid token');
@@ -92,11 +84,12 @@ const Account = {
     }
 
     const tempPassword = Math.random().toString(36).slice(-8);
-    const hashedTempPassword = await hashPassword(tempPassword);
+    const hashedTempPassword = await bcrypt.hash(tempPassword, 10);
+
     await BB.set('users', email, { ...user, password: hashedTempPassword });
 
     await transporter.sendMail({
-      from: 'your-email@gmail.com',
+      from: email.user,
       to: email,
       subject: 'Password Recovery',
       text: `Your temporary password is: ${tempPassword}`
@@ -113,6 +106,31 @@ const Account = {
     user.creditsBalance = amount;
     await BB.set('users', email, user);
     console.log(`Credits balance set to ${amount} for ${email}`);
+  },
+
+  // Add Credits to User Balance
+  async addCredits(email, amount) {
+    const user = await BB.get('users', email);
+    if (!user) {
+      throw new Error('User does not exist');
+    }
+    user.creditsBalance += amount;
+    await BB.set('users', email, user);
+    console.log(`Added ${amount} credits to ${email}. New balance: ${user.creditsBalance}`);
+  },
+
+  // Remove Credits from User Balance
+  async removeCredits(email, amount) {
+    const user = await BB.get('users', email);
+    if (!user) {
+      throw new Error('User does not exist');
+    }
+    if (user.creditsBalance < amount) {
+      throw new Error('Insufficient credits');
+    }
+    user.creditsBalance -= amount;
+    await BB.set('users', email, user);
+    console.log(`Removed ${amount} credits from ${email}. New balance: ${user.creditsBalance}`);
   },
 
   // Get User Credits Balance
