@@ -1,8 +1,13 @@
 // Account with token using BlackBoard to cache example
 // Assumes Blackboard is shared and init happened in server.js
-
+// npm install bcrypt nodemailer jsonwebtoken
 import bcrypt from 'bcrypt';
 import nodemailer from 'nodemailer';
+import jwt from 'jsonwebtoken';
+import BB from './BlackBoard.js'; // Assumes BlackBoard is initialized in server.js
+
+// JWT Secret for signing tokens
+const JWT_SECRET = 'your_secret_key'; // Change this to a secure, private key in production
 
 // Email Configuration for Password Recovery
 const transporter = nodemailer.createTransport({
@@ -26,15 +31,16 @@ async function validatePassword(password, hash) {
 // Account Object with Methods
 const Account = {
 
-  // Register a New User
-  async registerUser(email, password) {
+  // Register a New User with Role
+  async registerUser(email, password, role = 'user') {
     const user = await BB.get('users', email);
     if (user) {
       throw new Error('User already exists');
     }
+
     const hashedPassword = await hashPassword(password);
-    await BB.set('users', email, { email, password: hashedPassword, creditsBalance: 0 });
-    console.log('User registered successfully');
+    await BB.set('users', email, { email, password: hashedPassword, role, creditsBalance: 0 });
+    console.log(`User registered successfully with role: ${role}`);
   },
 
   // Login an Existing User
@@ -43,11 +49,39 @@ const Account = {
     if (!user) {
       throw new Error('User does not exist');
     }
+
     const isPasswordValid = await validatePassword(password, user.password);
     if (!isPasswordValid) {
       throw new Error('Invalid password');
     }
+
+    // Generate JWT token with user role
+    const token = jwt.sign({ email, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
     console.log('User logged in successfully');
+    return token;
+  },
+
+  // Verify JWT Token
+  verifyToken(token) {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      return decoded; // Returns the decoded token (email, role)
+    } catch (error) {
+      throw new Error('Invalid token');
+    }
+  },
+
+  // Role-based Access Control
+  async checkRole(email, requiredRole) {
+    const user = await BB.get('users', email);
+    if (!user) {
+      throw new Error('User does not exist');
+    }
+
+    if (user.role !== requiredRole) {
+      throw new Error('Insufficient permissions');
+    }
+    console.log(`Access granted for role: ${user.role}`);
   },
 
   // Password Recovery
@@ -56,15 +90,11 @@ const Account = {
     if (!user) {
       throw new Error('User does not exist');
     }
-    
-    // Generate a temporary password (or token for reset)
+
     const tempPassword = Math.random().toString(36).slice(-8);
     const hashedTempPassword = await hashPassword(tempPassword);
-    
-    // Update with temporary password
     await BB.set('users', email, { ...user, password: hashedTempPassword });
-    
-    // Send email with temporary password
+
     await transporter.sendMail({
       from: 'your-email@gmail.com',
       to: email,
@@ -101,34 +131,4 @@ const Account = {
   }
 };
 
-/* Example Usage
-(async () => {
-  try {
-    const email = 'user@example.com';
-    const password = 'securePassword123';
-
-    // Register a new user
-    await Account.registerUser(email, password);
-    
-    // Login the user
-    await Account.loginUser(email, password);
-    
-    // Set and check credits balance
-    await Account.setUserCreditsBalance(email, 100);
-    const balance = await Account.getUserCreditsBalance(email);
-    console.log(`Current balance for ${email}: ${balance}`);
-
-    // Check affordability
-    const amountToCheck = 50;
-    const affordCheck = await Account.canAfford(email, amountToCheck);
-    console.log(`${email} can afford ${amountToCheck}: ${affordCheck}`);
-
-    // Recover password
-    await Account.recoverPassword(email);
-
-  } catch (error) {
-    console.error(error.message);
-  }
-})();
-*/
 export default Account;
